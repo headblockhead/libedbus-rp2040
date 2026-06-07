@@ -1,63 +1,84 @@
-.pio_version 0
+.pio_version 0                        ; These programs require version 0 (RP2040) features only.
 
 .program edbus_tx
-.side_set 1 opt pindirs
+.side_set 1 opt pindirs               ; Optionally control 1 pin's state per instruction call. 
+                                      ; This is used to control the EBC (clock) pin.
+                                      ; For side_set to work, the EBC (clock) pin must be 1 after (to the side of) the EBD (data) pin.
 
-abandon:
-  mov osr, null
-  irq set 0
-public entry_point:
-.wrap_target
-  pull block
-  irq clear 0
-  wait 0 irq 7
-  set x, 31
-  set pindirs, 0      side 0  [7] 
+abandon:                              ; This label is jumped to if a transmission is abandoned whilst in progress.
+  mov osr, null                       ; Clear the output shift register (the register containing data pulled from the CPU).
+  irq set 0                           ; Set IRQ 0 to alert the CPU to the error condition so it can attempt retransmission.
+
+public entry_point:                   ; This is the actual entry point of the program, where execution starts after being initalised.
+.wrap_target                          ; The program will wrap around to this point after reaching the .wrap point.
+  pull block                          ; Pull 32 bits from the TX FIFO into the OSR. If no data has been put into the FIFO, just wait.
+                                      ; Data in the TX FIFO is data which has been sent by the CPU.
+  irq clear 0                         ; Clear IRQ 0. IRQ 0 represents when a transmission has been aborted.
+  wait 0 irq 7                        ; Wait until IRQ 7 is cleared (or proceed if it is already cleared).
+                                      ; IRQ 7 is set and cleared by the edbus_rx program, and is set whilst the bus is busy.
+  set x, 31                           ; Set register x to 31. Register x counts how many bits are left to transmit at the end of each write_bit loop.
+  set pindirs, 0      side 0  [7]     ; Set EBD and EBC low, then wait another 7 cycles.
 write_bit:
-  out y, 1
-  jmp !y do_zero
+  out y, 1                            ; Take one bit from the OSR, and place its value into the Y register.
+  jmp !y do_zero                      ; If y is equal to 0, jump to do_zero. Otherwise, fall through to do_one.
 do_one:
-  set pindirs, 1      side 1 [4]
-  jmp pin check_loop
-  jmp abandon
+  set pindirs, 1      side 1 [4]      ; Set EBD high, and EBC high, then wait another 4 cycles.
+  jmp pin check_loop                  ; If EBD is high, the 1 bit was successfully transmitted.
+  jmp abandon                         ; Otherwise if EBD is low, another node has transmitted a 0 whilst we've tried to transmit a 1, so abandon transmission here.
 do_zero:
-  set pindirs, 0      side 1 [5]
+  set pindirs, 0      side 1 [5]      ; Set EBD low, and EBC high, then wait another 5 cycles.
 check_loop:
-  jmp x-- write_bit   side 0 [2]
+  jmp x-- write_bit   side 0 [2]      ; If register x is not zero, loop back to write_bit. Otherwise, fall through as the transmission has finished.
+                                      ; Then, decrement the value of x, set EBC low, and wait another 2 cycles.
 done:
-  set pindirs, 1      side 1  [7] 
-.wrap
+  set pindirs, 1      side 1  [7]     ; Set EBD and EBC high, then wait another 7 cycles.
+.wrap                                 ; Wrap back around to .wrap_target.
 
 % c-sdk {
-
-#include "hardware/clocks.h"
 #include "hardware/gpio.h"
 
 static inline void edbus_tx_program_init(PIO pio, uint sm, uint offset, uint pin_ebd, uint pin_ebc) {
+    // EBC must be after EBD due to controlling EBC through side_set.
     assert(pin_ebc == pin_ebd + 1);
+    // Create a new config based on the default options.
     pio_sm_config c = edbus_tx_program_get_default_config(offset);
 
-    sm_config_set_set_pins(&c, pin_ebd, 1);
-    sm_config_set_out_pins(&c, pin_ebd, 1);
-    sm_config_set_jmp_pin(&c, pin_ebd);
-    sm_config_set_sideset_pins(&c, pin_ebc);
+    sm_config_set_set_pins(&c, pin_ebd, 1); // Make the 'set pins' and 'set pindirs' instructions manipulate the EBD pin.
+    sm_config_set_jmp_pin(&c, pin_ebd); // Make the 'jmp pin' instruction read the state of the EBD pin.
+    sm_config_set_sideset_pins(&c, pin_ebc); // Make the 'side 0' and 'side 1' side-set controls manipulate the EBC pin.
 
+    // Join the RX and TX FIFO buffers into one large TX buffer, as this program only needs TX.
     sm_config_set_fifo_join(&c, PIO_FIFO_JOIN_TX); 
 
+    // Run this program at half of the system clock speed.
     sm_config_set_clkdiv(&c, 2.0f);
 
-    gpio_pull_up(pin_ebc);
+    // Pull up both EBD and EBC.
     gpio_pull_up(pin_ebd);
-    uint32_t both_pins = (1u << pin_ebd) | (1u << pin_ebc);
-    pio_sm_set_pins_with_mask(pio, sm, both_pins, both_pins);
-    pio_sm_set_pindirs_with_mask(pio, sm, both_pins, both_pins);
+    gpio_pull_up(pin_ebc);
+    // Create a bitmask to control both EBD and EBC at the same time.
+    uint32_t pin_mask = (1u << pin_ebd) | (1u << pin_ebc);
+    pio_sm_set_pins_with_mask(pio, sm, pin_mask, pin_mask); // Set both EBD and EBC high.
+    pio_sm_set_pindirs_with_mask(pio, sm, pin_mask, pin_mask); // Set both EBD and EBC to the output direction (1).
+    // Initalise EBD and EBC.
     pio_gpio_init(pio, pin_ebd);
-    gpio_set_oeover(pin_ebd, GPIO_OVERRIDE_INVERT);
     pio_gpio_init(pio, pin_ebc);
+    // Invert the output enable (direction) controls for EBD and EBC.
+    // This makes direction 0 represent using the pin as an output, and direction 1 represent using the pin as an input, which is the inverse of normal operation.
+    // Both EBD and EBC are now inputs due to this inversion.
+    gpio_set_oeover(pin_ebd, GPIO_OVERRIDE_INVERT); 
     gpio_set_oeover(pin_ebc, GPIO_OVERRIDE_INVERT);
-    pio_sm_set_pins_with_mask(pio, sm, 0, both_pins);
+    // Set EBD and EBC to low.
+    // This has no effect yet, as EBD and EBC are currently inputs.
+    pio_sm_set_pins_with_mask(pio, sm, 0, pin_mask);
 
+    // This setup allows operating the EBD and EBC pins as an 'open-drain' bus.
+    // When EBD/EBC is set to be an input (direction 1 due to the inversion), the bus is left to be pulled up high.
+    // When EBD/EBC is set to be an output (direction 0 due to the inversion), the bus is driven low, as the pins have been pre-set to be low.
+
+    // Initialise the state machine at the entry_point label.
     pio_sm_init(pio, sm, offset + edbus_tx_offset_entry_point, &c);
+    // Enable the state machine.
     pio_sm_set_enabled(pio, sm, true);
 }
 %}
