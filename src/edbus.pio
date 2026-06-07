@@ -54,27 +54,31 @@ static inline void edbus_tx_program_init(PIO pio, uint sm, uint offset, uint pin
     sm_config_set_clkdiv(&c, 2.0f);
 
     // Pull up both EBD and EBC.
+    // 220Ω hardware resistors between EBD/EBC and 3.3V must be used in addition to this.
+    // This makes both pins logic level high by default, unless something drives them low.
     gpio_pull_up(pin_ebd);
     gpio_pull_up(pin_ebc);
     // Create a bitmask to control both EBD and EBC at the same time.
     uint32_t pin_mask = (1u << pin_ebd) | (1u << pin_ebc);
+    // Pre-set EBD and EBC to output high, so that they don't glitch the bus when initialised.
     pio_sm_set_pins_with_mask(pio, sm, pin_mask, pin_mask); // Set both EBD and EBC high.
     pio_sm_set_pindirs_with_mask(pio, sm, pin_mask, pin_mask); // Set both EBD and EBC to the output direction (1).
-    // Initalise EBD and EBC.
+    // Initialise EBD and EBC.
     pio_gpio_init(pio, pin_ebd);
     pio_gpio_init(pio, pin_ebc);
     // Invert the output enable (direction) controls for EBD and EBC.
     // This makes direction 0 represent using the pin as an output, and direction 1 represent using the pin as an input, which is the inverse of normal operation.
-    // Both EBD and EBC are now inputs due to this inversion.
+    // Both EBD and EBC are now passive inputs due to this inversion.
     gpio_set_oeover(pin_ebd, GPIO_OVERRIDE_INVERT); 
     gpio_set_oeover(pin_ebc, GPIO_OVERRIDE_INVERT);
-    // Set EBD and EBC to low.
-    // This has no effect yet, as EBD and EBC are currently inputs.
+    // Pre-set EBD and EBC to low. This has no effect yet, as EBD and EBC are currently inputs.
     pio_sm_set_pins_with_mask(pio, sm, 0, pin_mask);
 
     // This setup allows operating the EBD and EBC pins as an 'open-drain' bus.
     // When EBD/EBC is set to be an input (direction 1 due to the inversion), the bus is left to be pulled up high.
     // When EBD/EBC is set to be an output (direction 0 due to the inversion), the bus is driven low, as the pins have been pre-set to be low.
+    // The inversion is used to make the edbus_tx program easier to read.
+    // The inversion makes 'set pindirs, 0' drive EBD low, and 'set pindirs, 1' leave EBD high, which is easier to read than if the inverse were true.
 
     // Initialise the state machine at the entry_point label.
     pio_sm_init(pio, sm, offset + edbus_tx_offset_entry_point, &c);
