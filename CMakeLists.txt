@@ -5,7 +5,6 @@ project(edbus-rp2040 C CXX ASM)
 pico_sdk_init()
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
-
 add_library(${PROJECT_NAME}
   src/edbus.c
 )

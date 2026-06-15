@@ -4,28 +4,50 @@
 #include "pico/stdlib.h"
 
 struct edbus_state {
-  PIO tx_pio;
-  uint tx_sm;
-  PIO rx_pio;
+  PIO pio;
   uint rx_sm;
+  uint tx_sm;
 } state;
 
-edbus_init_result_t edbus_init(void) {
-  uint rx_offset;
-  bool rx_success = pio_claim_free_sm_and_add_program_for_gpio_range(
-      &edbus_rx_program, &state.rx_pio, &state.rx_sm, &rx_offset, 6, 2, true);
-  if (!rx_success) {
-    return EDBUS_INIT_RX_ERROR;
-  }
-  edbus_rx_program_init(state.rx_pio, state.rx_sm, rx_offset, 6, 7);
+void edbus_tx_irq0_callback(void) {
+  // TODO
+}
 
-  uint tx_offset;
-  bool tx_success = pio_claim_free_sm_and_add_program_for_gpio_range(
-      &edbus_tx_program, &state.tx_pio, &state.tx_sm, &tx_offset, 6, 2, true);
-  if (!tx_success) {
-    return EDBUS_INIT_TX_ERROR;
+edbus_init_result_t edbus_init(PIO pio, uint rx_sm, uint tx_sm, uint gpio_ebd,
+                               uint gpio_ebc) {
+  if (pio != pio0 && pio != pio1) {
+    return EDBUS_INIT_ERROR_INVALID_PIO;
   }
-  edbus_tx_program_init(state.tx_pio, state.tx_sm, tx_offset, 6, 7);
+  if (rx_sm > 3) {
+    return EDBUS_INIT_ERROR_INVALID_RX_SM;
+  }
+  if (tx_sm > 3) {
+    return EDBUS_INIT_ERROR_INVALID_TX_SM;
+  }
+  if (gpio_ebd + 1 != gpio_ebc) {
+    return EDBUS_INIT_ERROR_GPIO_NOT_SEQUENTIAL;
+  }
+
+  state.pio = pio;
+  state.rx_sm = rx_sm;
+  state.tx_sm = tx_sm;
+
+  int rx_offset = pio_add_program(state.pio, &edbus_rx_program);
+  if (rx_offset < 0) {
+    return EDBUS_INIT_ERROR_RX;
+  }
+  edbus_rx_program_init(state.pio, state.rx_sm, rx_offset, gpio_ebd, gpio_ebc);
+
+  int tx_offset = pio_add_program(state.pio, &edbus_tx_program);
+  if (tx_offset < 0) {
+    return EDBUS_INIT_ERROR_TX;
+  }
+  edbus_tx_program_init(state.pio, state.tx_sm, tx_offset, gpio_ebd, gpio_ebc);
+
+  pio_set_irq0_source_enabled(state.pio, pis_interrupt0, true);
+  uint irq_num = PIO_IRQ_NUM(state.pio, 0);
+  irq_set_exclusive_handler(irq_num, edbus_tx_irq0_callback);
+  irq_set_enabled(irq_num, true);
 
   return EDBUS_INIT_OK;
 }
