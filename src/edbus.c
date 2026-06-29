@@ -101,13 +101,9 @@ void edbus_init(const edbus_config_t *config) {
   init_pio_irq(config);
   init_dma_channels(config);
   init_dma_irq(config);
-
-  DMA_SNIFF_CTRL_CALC_VALUE_CRC16;
 }
 
-static uint16_t calculate_crc_of(uint8_t data[29]) {
-  // TODO
-}
+static uint16_t calculate_crc16_of(uint8_t data[29]) {}
 
 void edbus_construct_message(uint8_t channel, uint8_t data[29],
                              edbus_message_t *new_message) {
