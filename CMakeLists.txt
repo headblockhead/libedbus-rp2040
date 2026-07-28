@@ -20,3 +20,14 @@ pico_generate_pio_header(${PROJECT_NAME} ${CMAKE_CURRENT_LIST_DIR}/src/edbus.pio
 
 install(TARGETS ${PROJECT_NAME})
 install(DIRECTORY include/ DESTINATION include)
+
+configure_file(
+  cmake/edbus-rp2040-config.cmake.in
+  ${CMAKE_CURRENT_BINARY_DIR}/edbus-rp2040-config.cmake
+  @ONLY
+)
+
+install(FILES
+  ${CMAKE_CURRENT_BINARY_DIR}/edbus-rp2040-config.cmake
+  DESTINATION lib/cmake/edbus-rp2040
+)
