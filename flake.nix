@@ -15,11 +15,32 @@
     in
     {
       packages = forEachSystemWithPkgs (pkgs: rec {
-        libedbus-rp2040 = builtins.path {
-          path = pkgs.lib.cleanSource ./.;
-          name = "edbus-rp2040";
+        libedbus-rp2040 = pkgs.stdenv.mkDerivation {
+          name = "libedbus-rp2040";
+          src = pkgs.lib.cleanSource ./.;
+
+          nativeBuildInputs = with pkgs; [
+            cmake
+            gcc-arm-embedded
+            python313
+          ];
+          cmakeFlags = [
+            "-DCMAKE_C_COMPILER=${pkgs.gcc-arm-embedded}/bin/arm-none-eabi-gcc"
+            "-DCMAKE_CXX_COMPILER=${pkgs.gcc-arm-embedded}/bin/arm-none-eabi-g++"
+          ];
+          env.PICO_SDK_PATH = "${pkgs.pico-sdk}/lib/pico-sdk";
         };
         default = libedbus-rp2040;
+      });
+      devShells = forEachSystemWithPkgs (pkgs: {
+        default = pkgs.mkShell {
+          packages = with pkgs; [
+            cmake
+            gcc-arm-embedded
+            python313
+          ];
+          PICO_SDK_PATH = "${pkgs.pico-sdk}/lib/pico-sdk";
+        };
       });
     };
 }

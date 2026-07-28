@@ -17,3 +17,6 @@ target_include_directories(${PROJECT_NAME} PUBLIC
   ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 pico_generate_pio_header(${PROJECT_NAME} ${CMAKE_CURRENT_LIST_DIR}/src/edbus.pio)
+
+install(TARGETS ${PROJECT_NAME})
+install(DIRECTORY include/ DESTINATION include)
