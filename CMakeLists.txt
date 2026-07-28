@@ -19,7 +19,7 @@ target_include_directories(${PROJECT_NAME} PUBLIC
 pico_generate_pio_header(${PROJECT_NAME} ${CMAKE_CURRENT_LIST_DIR}/src/edbus.pio)
 
 install(TARGETS ${PROJECT_NAME})
-install(DIRECTORY include DESTINATION include)
+install(DIRECTORY include/ DESTINATION include)
 
 include(CMakePackageConfigHelpers)
 configure_package_config_file(
