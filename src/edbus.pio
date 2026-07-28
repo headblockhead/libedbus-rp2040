@@ -12,6 +12,9 @@
 
 .define public error_irq 0        ; Use IRQ 0 to represent an error to the CPU.
 
+.define public done_irq 1         ; Use IRQ 1 to represent when a transmission
+                                  ; completed successfully to the CPU.
+
 .side_set 1 opt pindirs           ; This program will optionally manipulate the
                                   ; state of 1 pin simultaneously with an
                                   ; instruction call. This is used here to
@@ -102,6 +105,9 @@ next_word:
                                   ; cycles. This indicates to all nodes on the
                                   ; bus that the transmission has ended.
                                   
+  irq wait done_irq               ; Set the done IRQ to alert the CPU that the
+                                  ; transmission completed successfully.
+
 .wrap                             ; Wrap back to the .wrap_target position.
 
 % c-sdk {
@@ -140,6 +146,10 @@ static inline void edbus_tx_program_init(PIO pio, uint sm, uint offset,
     // long as the system clock speed remains constant after
     // edbus_tx_program_init is called.
     sm_config_set_clkdiv(&c, div);
+
+    // Shift the OSR in the left direction when executing an 'out' instruction,
+    // so that bits are output with the most significant bit first.
+    sm_config_set_out_shift(&c, false, false, 32);
 
     // Pull up both EBD and EBC.
     // 2.2kΩ hardware resistors between EBD/EBC and 3.3V must be used in 
@@ -300,6 +310,10 @@ static inline void edbus_rx_program_init(PIO pio, uint sm, uint offset,
     // long as the system clock speed remains constant after
     // edbus_rx_program_init is called.
     sm_config_set_clkdiv(&c, div);
+
+    // Shift the ISR in the left direction when executing an 'in' instruction,
+    // so that bits are read with the most significant bit first.
+    sm_config_set_in_shift(&c, false, false, 32);
 
     // Initialise the state machine at the start of the program.
     pio_sm_init(pio, sm, offset, &c);
