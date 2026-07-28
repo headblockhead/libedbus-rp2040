@@ -5,6 +5,7 @@
 #include "hardware/pio.h"
 #include "pico/sem.h"
 #include "pico/stdlib.h"
+#include <stdio.h>
 #include <string.h>
 
 static void uint8_to_uint32(const uint8_t in[4], uint32_t *out) {
@@ -12,10 +13,10 @@ static void uint8_to_uint32(const uint8_t in[4], uint32_t *out) {
          ((uint32_t)in[2] << 8) | ((uint32_t)in[3] << 0);
 }
 
-static void message_bytes_to_message(const uint8_t message_bytes[32],
-                                     edbus_message_t message_out) {
-  for (int i = 0; i < 8; i++) {
-    uint8_to_uint32(&message_bytes[i * 4], &message_out[i]);
+static void data_bytes_to_message(const uint8_t data[24],
+                                  edbus_message_t message_out) {
+  for (int i = 0; i < 6; i++) {
+    uint8_to_uint32(&data[i * 4], &message_out[i + 1]);
   }
 }
 
@@ -26,10 +27,10 @@ static void uint32_to_uint8(uint32_t in, uint8_t out[4]) {
   out[3] = (uint8_t)((in >> 0) & 0xFF);
 }
 
-static void message_to_message_bytes(const edbus_message_t message,
-                                     uint8_t message_bytes_out[32]) {
-  for (int i = 0; i < 8; i++) {
-    uint32_to_uint8(message[i], &message_bytes_out[i * 4]);
+static void message_to_data_bytes(const edbus_message_t message,
+                                  uint8_t data_bytes_out[24]) {
+  for (int i = 0; i < 6; i++) {
+    uint32_to_uint8(message[i + 1], &data_bytes_out[i * 4]);
   }
 }
 
@@ -106,7 +107,7 @@ static void init_pio_irq(void) {
   irq_set_enabled(nvic_irq_num_pio, true);
 }
 
-static void init_dma_rx() {
+static void init_dma_rx(void) {
   dma_channel_claim(config.dma_channel_rx);
   dma_channel_config dma_config_rx =
       dma_channel_get_default_config(config.dma_channel_rx);
@@ -117,6 +118,7 @@ static void init_dma_rx() {
   channel_config_set_dreq(&dma_config_rx, dreq_rx);
   channel_config_set_sniff_enable(&dma_config_rx, true);
   dma_sniffer_set_data_accumulator(0xFFFFFFFF);
+  dma_sniffer_set_byte_swap_enabled(true);
   dma_sniffer_enable(config.dma_channel_rx, DMA_SNIFF_CTRL_CALC_VALUE_CRC32,
                      true);
   dma_channel_configure(config.dma_channel_rx, &dma_config_rx, message_inbound,
@@ -124,7 +126,7 @@ static void init_dma_rx() {
                         dma_encode_transfer_count(8), false);
 }
 
-static void init_dma_tx() {
+static void init_dma_tx(void) {
   dma_channel_claim(config.dma_channel_tx);
   dma_channel_config dma_config_tx =
       dma_channel_get_default_config(config.dma_channel_tx);
@@ -144,9 +146,9 @@ static void edbus_dma_irq_handler(void) {
     dma_irqn_acknowledge_channel(config.dma_irq_index, config.dma_channel_rx);
     uint32_t crc = dma_sniffer_get_data_accumulator();
     if (crc == 0) {
-      uint8_t message_bytes[32];
-      message_to_message_bytes(message_inbound, message_bytes);
-      config.message_consumer(message_inbound[0], &message_bytes[4]);
+      uint8_t data_bytes[24];
+      message_to_data_bytes(message_inbound, data_bytes);
+      config.message_consumer(message_inbound[0], data_bytes);
     }
     dma_sniffer_set_data_accumulator(0xFFFFFFFF);
     dma_channel_set_write_addr(config.dma_channel_rx, message_inbound, true);
@@ -157,7 +159,7 @@ static void edbus_dma_irq_handler(void) {
   };
 }
 
-static void init_dma_irq() {
+static void init_dma_irq(void) {
   dma_irqn_set_channel_enabled(config.dma_irq_index, config.dma_channel_rx,
                                true);
   dma_irqn_set_channel_enabled(config.dma_irq_index, config.dma_channel_tx,
@@ -169,7 +171,7 @@ static void init_dma_irq() {
   irq_set_enabled(nvic_irq_num_dma, true);
 }
 
-void edbus_enable() {
+void edbus_enable(void) {
   sem_init(&message_outbound_semaphore, 1, 1);
   init_pio_program_rx();
   init_pio_program_tx();
@@ -180,23 +182,24 @@ void edbus_enable() {
   dma_channel_start(config.dma_channel_rx);
 }
 
-static uint32_t calculate_crc(uint8_t message_bytes[32]) {
+static void insert_crc(edbus_message_t message) {
   uint32_t crc = 0xFFFFFFFF;
   for (int i = 0; i < 28; i++) {
-    uint8_t table_index = (crc >> 24) ^ message_bytes[i];
+    uint message_index = i / 4;
+    uint word_shift = 24 - ((i % 4) * 8);
+    uint8_t message_byte = message[message_index] >> word_shift;
+
+    uint8_t table_index = (crc >> 24) ^ message_byte;
     crc = (crc << 8) ^ crc32_table[table_index];
   }
-  return crc;
+  message[7] = crc;
 }
 
 void edbus_construct_message(uint32_t identifier, const uint8_t data[24],
                              edbus_message_t message_out) {
-  uint8_t message_bytes[32];
-  uint32_to_uint8(identifier, message_bytes);
-  memcpy(&message_bytes[4], data, 24);
-  uint32_t crc = calculate_crc(message_bytes);
-  uint32_to_uint8(crc, &message_bytes[28]);
-  message_bytes_to_message(message_bytes, message_out);
+  message_out[0] = identifier;
+  data_bytes_to_message(data, message_out);
+  insert_crc(message_out);
 }
 
 void edbus_send_message(edbus_message_t message) {
