@@ -1,12 +1,30 @@
 #include "edbus.h"
 #include "crc32.h"
 #include "edbus.pio.h"
-#include "hardware/dma.h"
-#include "hardware/pio.h"
-#include "pico/sem.h"
-#include "pico/stdlib.h"
+
+#include <hardware/dma.h>
+#include <hardware/pio.h>
+#include <pico/sem.h>
+#include <pico/stdlib.h>
+
 #include <stdio.h>
 #include <string.h>
+
+struct edbus_config_t {
+  PIO pio;
+  uint rx_sm;
+  uint tx_sm;
+  uint pio_irq_num;
+
+  uint dma_chan_rx;
+  uint dma_chan_tx;
+  uint dma_irq_num;
+
+  uint pin_ebd;
+  uint pin_ebc;
+
+  edbus_callback_t callback;
+};
 
 static void uint8_to_uint32(const uint8_t in[4], uint32_t *out) {
   *out = ((uint32_t)in[0] << 24) | ((uint32_t)in[1] << 16) |
@@ -40,7 +58,7 @@ static edbus_message_t message_inbound;
 static edbus_config_t config;
 
 static void edbus_check_config(const edbus_config_t *c) {
-  check_pio_param(c->pio);
+  check_pio_param(PIO_INSTANCE(c->pio_num));
   check_sm_param(c->rx_sm);
   check_sm_param(c->tx_sm);
   invalid_params_if(HARDWARE_PIO, c->pio_irq_index >= NUM_PIO_IRQS);
@@ -57,13 +75,13 @@ void edbus_configure(const edbus_config_t *c) {
   config = *c;
 }
 
-static void init_pio_program_rx(void) {
+static void init_pio_program_rx() {
   uint offset_rx = pio_add_program(config.pio, &edbus_rx_program);
   edbus_rx_program_init(config.pio, config.rx_sm, offset_rx, config.pin_ebd,
                         config.pin_ebc);
 }
 
-static void init_pio_program_tx(void) {
+static void init_pio_program_tx() {
   uint offset_tx = pio_add_program(config.pio, &edbus_tx_program);
   edbus_tx_program_init(config.pio, config.tx_sm, offset_tx, config.pin_ebd,
                         config.pin_ebc);
@@ -78,7 +96,7 @@ static pio_interrupt_source_t pio_get_interrupt_source(uint interrupt) {
   return (pio_interrupt_source_t)(pis_interrupt0 + interrupt);
 }
 
-static void edbus_pio_irq_handler(void) {
+static void edbus_pio_irq_handler() {
   if (pio_interrupt_get(config.pio, edbus_tx_error_irq)) {
     dma_channel_abort(config.dma_channel_tx);
     pio_sm_clear_fifos(config.pio, config.tx_sm);
@@ -91,7 +109,7 @@ static void edbus_pio_irq_handler(void) {
   }
 }
 
-static void init_pio_irq(void) {
+static void init_pio_irq() {
   pio_interrupt_source_t irq_source_tx_error =
       pio_get_interrupt_source(edbus_tx_error_irq);
   pio_interrupt_source_t irq_source_tx_done =
@@ -107,7 +125,7 @@ static void init_pio_irq(void) {
   irq_set_enabled(nvic_irq_num_pio, true);
 }
 
-static void init_dma_rx(void) {
+static void init_dma_rx() {
   dma_channel_claim(config.dma_channel_rx);
   dma_channel_config dma_config_rx =
       dma_channel_get_default_config(config.dma_channel_rx);
@@ -126,7 +144,7 @@ static void init_dma_rx(void) {
                         dma_encode_transfer_count(8), false);
 }
 
-static void init_dma_tx(void) {
+static void init_dma_tx() {
   dma_channel_claim(config.dma_channel_tx);
   dma_channel_config dma_config_tx =
       dma_channel_get_default_config(config.dma_channel_tx);
@@ -140,7 +158,7 @@ static void init_dma_tx(void) {
                         dma_encode_transfer_count(8), false);
 }
 
-static void edbus_dma_irq_handler(void) {
+static void edbus_dma_irq_handler() {
   if (dma_irqn_get_channel_status(config.dma_irq_index,
                                   config.dma_channel_rx)) {
     dma_irqn_acknowledge_channel(config.dma_irq_index, config.dma_channel_rx);
@@ -159,7 +177,7 @@ static void edbus_dma_irq_handler(void) {
   };
 }
 
-static void init_dma_irq(void) {
+static void init_dma_irq() {
   dma_irqn_set_channel_enabled(config.dma_irq_index, config.dma_channel_rx,
                                true);
   dma_irqn_set_channel_enabled(config.dma_irq_index, config.dma_channel_tx,
@@ -171,7 +189,7 @@ static void init_dma_irq(void) {
   irq_set_enabled(nvic_irq_num_dma, true);
 }
 
-void edbus_enable(void) {
+void edbus_enable() {
   sem_init(&message_outbound_semaphore, 1, 1);
   init_pio_program_rx();
   init_pio_program_tx();
@@ -185,11 +203,12 @@ void edbus_enable(void) {
 static void insert_crc(edbus_message_t message) {
   uint32_t crc = 0xFFFFFFFF;
   for (int i = 0; i < 28; i++) {
-    uint message_index = i / 4;
-    uint word_shift = 24 - ((i % 4) * 8);
+    uint_fast16_t message_index = i / 4;
+    uint8_t word_shift = 24 - ((i % 4) * 8);
     uint8_t message_byte = message[message_index] >> word_shift;
 
-    uint8_t table_index = (crc >> 24) ^ message_byte;
+    uint8_t crc_msb = crc >> 24;
+    uint8_t table_index = crc_msb ^ message_byte;
     crc = (crc << 8) ^ crc32_table[table_index];
   }
   message[7] = crc;

@@ -106,7 +106,8 @@ next_word:
                                   ; bus that the transmission has ended.
                                   
   irq wait done_irq               ; Set the done IRQ to alert the CPU that the
-                                  ; transmission completed successfully.
+                                  ; transmission completed successfully, then
+                                  ; wait for the CPU to clear the IRQ.
 
 .wrap                             ; Wrap back to the .wrap_target position.
 
@@ -151,12 +152,10 @@ static inline void edbus_tx_program_init(PIO pio, uint sm, uint offset,
     // so that bits are output with the most significant bit first.
     sm_config_set_out_shift(&c, false, false, 32);
 
-    // Pull up both EBD and EBC.
-    // 2.2kΩ hardware resistors between EBD/EBC and 3.3V must be used in 
-    // addition to the GPIO's built-in pullups. This makes both pins remain at
-    // logic level high by default, unless something drives them low.
-    gpio_pull_up(pin_ebd);
-    gpio_pull_up(pin_ebc);
+    // Hardware pullup resistors between EBD/EBC and 3.3V must be used.
+    // These fix both pins at logic level high by default, unless they are 
+    // driven low. The builtin GPIO pullups are not used as they have too high
+    // of a resistance for driving the pins at high frequency.
 
     // Create a utility bitmask to control both EBD and EBC at the same time.
     uint32_t pin_mask = (1u << pin_ebd) | (1u << pin_ebc);
@@ -208,6 +207,7 @@ static inline void edbus_tx_program_init(PIO pio, uint sm, uint offset,
 reset:
 .wrap_target                      ; When the .wrap position is reached,
                                   ; execution will continue from .wrap_target.
+
   irq clear edbus_busy_irq        ; Clear the edbus_busy_irq. This indicates to
                                   ; edbus_tx that the bus is currently 
                                   ; inactive.
@@ -239,9 +239,9 @@ read_word:
                                   ; (32 - 1 = 31).
 read_bit:
   wait 1 pin, 1       [2]         ; Wait for EBC to go high, then wait another
-                                  ; 2 cycles. The extra two-cycle gives the EBD
-                                  ; line time to stabilise before its value is
-                                  ; read.
+                                  ; 2 cycles. The extra two-cycle wait gives 
+                                  ; the EBD line time to stabilise before its
+                                  ; value is read.
 
   in pins, 1                      ; Read the state of the EBD pin, and shift
                                   ; its value (one bit) into the Input Shift
